@@ -281,3 +281,21 @@ if __name__ == "__main__":
         run_once()
     else:
         main_loop()
+
+# ======================================
+# AUTO-RESTART PARA LIBERAR MEMÓRIA
+# ======================================
+import os
+import threading
+
+# Tempo em minutos para reiniciar (exemplo: 1440 = 24 horas)
+AUTO_RESTART_MINUTES = 1440  
+
+def auto_restart():
+    print("⏳ Reiniciando automaticamente para liberar memória...")
+    os._exit(0)  # Square Cloud detecta e reinicia sozinho
+
+if AUTO_RESTART_MINUTES > 0:
+    t = threading.Timer(AUTO_RESTART_MINUTES * 60, auto_restart)
+    t.daemon = True
+    t.start()
