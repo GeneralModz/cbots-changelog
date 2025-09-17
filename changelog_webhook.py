@@ -117,9 +117,13 @@ BRASILIA_TZ = timezone(timedelta(hours=-3))
 WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK")
 
 def build_embed(entry):
-    game_name = entry.get("game", "Unknown Game")
-    mensagem_pt = entry.get("mensagem_pt", "Mensagem em português não disponível")
-    mensagem_en = entry.get("mensagem_en", "Message in English not available")
+    # imprime o JSON cru para debug
+    print("🔍 DEBUG entry:", json.dumps(entry, indent=2, ensure_ascii=False))
+
+    # Ajusta de acordo com as chaves reais que vierem da API
+    game_name = entry.get("game") or entry.get("Game") or "Sem nome"
+    mensagem_pt = entry.get("mensagem_pt") or entry.get("MensagemPT") or entry.get("mensagem") or "Mensagem PT não encontrada"
+    mensagem_en = entry.get("mensagem_en") or entry.get("MensagemEN") or "Mensagem EN não encontrada"
 
     # Data em horário de Brasília
     now_brasilia = datetime.now(BRASILIA_TZ).strftime("%d/%m/%Y, %H:%M:%S")
@@ -139,14 +143,14 @@ def build_embed(entry):
                 "inline": False
             },
             {
-                "name": "\u200B",  # campo vazio invisível
-                "value": "@everyone",
+                "name": "\u200B",  # campo invisível
+                "value": "@​everyone",  # <- tem um caractere invisível dentro, vai mencionar mas não fica igual no código
                 "inline": False
             }
         ]
     }
-
     return embed
+
 
 
 def send_to_discord(entry):
