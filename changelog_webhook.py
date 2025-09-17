@@ -22,7 +22,7 @@ Variáveis esperadas (exemplos):
   POLL_INTERVAL=300
   POST_HISTORY_ON_FIRST_RUN=false
   STATE_FILE=changelog_state.json
-print("🚀 Teste de deploy automático na Square Cloud")
+print("🚀 Teste de deploy automático naa Square Cloud")
 
 """
 
