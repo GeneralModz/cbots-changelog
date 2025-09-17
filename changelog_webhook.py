@@ -106,7 +106,13 @@ def format_local(dt):
     # ======================================
 # EMBED FORMATADO
 # ======================================
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
+import requests
+
+# Configura fuso horário de Brasília (UTC-3)
+BRASILIA_TZ = timezone(timedelta(hours=-3))
+
+WEBHOOK_URL = "https://discord.com/api/webhooks/xxxxxxx"  # coloque seu webhook
 
 def build_embed(entry):
     game_name = entry.get("game", "Unknown Game")
@@ -124,13 +130,19 @@ def build_embed(entry):
             },
             {
                 "name": "⏰ Data",
-                "value": f"{datetime.now().strftime('%d/%m/%Y, %H:%M:%S')}\n@everyone",
+                "value": f"{datetime.now(BRASILIA_TZ).strftime('%d/%m/%Y, %H:%M:%S')}\n@everyone",
                 "inline": False
             }
         ]
     }
 
     return embed
+
+def send_update(entry):
+    embed = build_embed(entry)
+    data = {"embeds": [embed]}
+    requests.post(WEBHOOK_URL, json=data)
+
 
 
 
