@@ -107,33 +107,31 @@ def format_local(dt):
 # EMBED FORMATADO
 # ======================================
 from datetime import datetime
-import discord
 
 def build_embed(entry):
     game_name = entry.get("game", "Unknown Game")
     mensagem_pt = entry.get("mensagem_pt", "Mensagem em português não disponível")
     mensagem_en = entry.get("mensagem_en", "Message in English not available")
 
-    embed = discord.Embed(
-        title="📢 Nova atualização",
-        color=discord.Color.red()
-    )
-
-    # Mensagens PT e EN
-    embed.add_field(
-        name="📝 Mensagem",
-        value=f"🇧🇷 [{game_name}] - {mensagem_pt}\n🇺🇸 [{game_name}] - {mensagem_en}",
-        inline=False
-    )
-
-    # Data + @everyone
-    embed.add_field(
-        name="⏰ Data",
-        value=f"{datetime.now().strftime('%d/%m/%Y, %H:%M:%S')}\n@everyone",
-        inline=False
-    )
+    embed = {
+        "title": "📢 Nova atualização",
+        "color": 15158332,  # vermelho
+        "fields": [
+            {
+                "name": "📝 Mensagem",
+                "value": f"🇧🇷 [{game_name}] - {mensagem_pt}\n🇺🇸 [{game_name}] - {mensagem_en}",
+                "inline": False
+            },
+            {
+                "name": "⏰ Data",
+                "value": f"{datetime.now().strftime('%d/%m/%Y, %H:%M:%S')}\n@everyone",
+                "inline": False
+            }
+        ]
+    }
 
     return embed
+
 
 
 
