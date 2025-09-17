@@ -48,6 +48,9 @@ import requests
 
 # ---------------- CONFIG (lê das variáveis de ambiente) ----------------
 WEBHOOK_URL = os.getenv("WEBHOOK_URL") or os.getenv("DISCORD_WEBHOOK")
+if not WEBHOOK_URL:
+    print("⚠️ Nenhum webhook configurado! Defina WEBHOOK_URL ou DISCORD_WEBHOOK.")
+
 API_URL = os.getenv("API_URL", "")
 API_USERNAME = os.getenv("API_USERNAME")
 API_PASSWORD = os.getenv("API_PASSWORD")
@@ -55,6 +58,7 @@ POLL_INTERVAL = int(os.getenv("POLL_INTERVAL", "300"))  # segundos
 STATE_FILE = os.getenv("STATE_FILE", "changelog_state.json")
 POST_HISTORY_ON_FIRST_RUN = os.getenv("POST_HISTORY_ON_FIRST_RUN", "false").lower() in ("1", "true", "yes")
 RED_COLOR = int(os.getenv("RED_COLOR", "0xFF0000"), 0)
+
 
 # -----------------------------------------------------------------------
 
