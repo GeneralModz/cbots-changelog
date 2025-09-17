@@ -9,7 +9,7 @@ Script simples para consultar a API de change logs (com Basic Auth) e enviar uma
 - Modo `--once` para execução única (útil para testes / agendamento).
 
 Como usar (resumo):
-1) Criar um .env ou definir as variáveis de ambiente abaixo
+1) -Criar um .env ou definir as variáveis de ambiente abaixo
 2) Instalar dependências: pip install requests python-dotenv
 3) Rodar: python changelog_webhook.py --once   (teste)
    ou:  python changelog_webhook.py            (loop contínuo)
