@@ -102,7 +102,7 @@ def format_local(dt):
     return dt.strftime("%d/%m/%Y, %H:%M:%S"), dt.strftime("%H:%M")
 
 
-def build_embed(entry):
+
     # ======================================
 # EMBED FORMATADO
 # ======================================
