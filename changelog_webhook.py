@@ -102,36 +102,48 @@ def format_local(dt):
 
 
 def build_embed(entry):
-    # Campos esperados: Id, CreatedAt, Message (ou id, createdAt, message)
-    eid = entry.get("id") or entry.get("Id") or 0
-    raw_msg = entry.get("message") or entry.get("Message") or ""
-    created = entry.get("createdAt") or entry.get("CreatedAt") or ""
+    # ======================================
+# EMBED FORMATADO
+# ======================================
+from datetime import datetime
 
-    dt = parse_iso_datetime(created) or datetime.now()
-    date_str, time_only = format_local(dt)
+def build_embed(entry):
+    game_name = entry.get("game", "Unknown Game")
+    mensagem_pt = entry.get("mensagem_pt", "Mensagem em português não disponível")
+    mensagem_en = entry.get("mensagem_en", "Message in English not available")
 
-    # separar PT e EN por linhas (primeira linha = PT, segunda = EN)
-    lines = [ln.strip() for ln in raw_msg.splitlines() if ln.strip()]
-    if len(lines) >= 2:
-        pt = lines[0]
-        en = lines[1]
+    # Data formatada (exemplo: 17/09/2025, 00:27:26)
+    created_at = entry.get("createdAt") or entry.get("CreatedAt")
+    if created_at:
+        dt = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+        formatted_date = dt.strftime("%d/%m/%Y, %H:%M:%S")
     else:
-        pt = raw_msg
-        en = raw_msg
-
-    # agora com @everyone de verdade (ping real)
-    field_value = f"🇧🇷 {pt}\n🇺🇸 {en}\n@everyone"
+        formatted_date = "Data desconhecida"
 
     embed = {
         "title": "📢 Nova atualização",
-        "color": RED_COLOR,
+        "color": 0xFF0000,
         "fields": [
-            {"name": "📝 Mensagem", "value": field_value},
-            {"name": "⏰ Date", "value": date_str}
+            {
+                "name": "🇧🇷 Mensagem",
+                "value": f"[{game_name}] - {mensagem_pt}\n||@everyone||",
+                "inline": False
+            },
+            {
+                "name": "🇺🇸 Message",
+                "value": f"[{game_name}] - {mensagem_en}",
+                "inline": False
+            },
+            {
+                "name": "📅 Data",
+                "value": formatted_date,
+                "inline": False
+            }
         ]
     }
 
     return embed
+
 
 
 
