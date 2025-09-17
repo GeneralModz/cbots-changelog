@@ -106,12 +106,16 @@ def build_embed(entry):
     # ======================================
 # EMBED FORMATADO
 # ======================================
-from datetime import datetime
+from datetime import datetime   # importa uma vez só, lá no topo do arquivo
 
 def build_embed(entry):
+    # ======================================
+    # EMBED FORMATADO
+    # ======================================
     game_name = entry.get("game", "Unknown Game")
     mensagem_pt = entry.get("mensagem_pt", "Mensagem em português não disponível")
     mensagem_en = entry.get("mensagem_en", "Message in English not available")
+
 
     # Data formatada (exemplo: 17/09/2025, 00:27:26)
     created_at = entry.get("createdAt") or entry.get("CreatedAt")
