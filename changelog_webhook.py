@@ -107,30 +107,40 @@ def format_local(dt):
 # EMBED FORMATADO
 # ======================================
 from datetime import datetime, timedelta, timezone
+import os
 import requests
 
 # Configura fuso horário de Brasília (UTC-3)
 BRASILIA_TZ = timezone(timedelta(hours=-3))
 
-WEBHOOK_URL = "https://discord.com/api/webhooks/xxxxxxx"  # coloque seu webhook
+# Pega o webhook de uma variável de ambiente (mais seguro que deixar fixo no código)
+WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK")
 
 def build_embed(entry):
     game_name = entry.get("game", "Unknown Game")
     mensagem_pt = entry.get("mensagem_pt", "Mensagem em português não disponível")
     mensagem_en = entry.get("mensagem_en", "Message in English not available")
 
+    # Data em horário de Brasília
+    now_brasilia = datetime.now(BRASILIA_TZ).strftime("%d/%m/%Y, %H:%M:%S")
+
     embed = {
         "title": "📢 Nova atualização",
-        "color": 15158332,  # vermelho
+        "color": 0xFF0000,  # vermelho
         "fields": [
             {
-                "name": "📝 Mensagem",
+                "name": "🎮 Mensagem",
                 "value": f"🇧🇷 [{game_name}] - {mensagem_pt}\n🇺🇸 [{game_name}] - {mensagem_en}",
                 "inline": False
             },
             {
-                "name": "⏰ Data",
-                "value": f"{datetime.now(BRASILIA_TZ).strftime('%d/%m/%Y, %H:%M:%S')}\n@everyone",
+                "name": "🕒 Date",
+                "value": now_brasilia,
+                "inline": False
+            },
+            {
+                "name": "\u200B",  # campo vazio invisível
+                "value": "@everyone",
                 "inline": False
             }
         ]
@@ -138,10 +148,25 @@ def build_embed(entry):
 
     return embed
 
-def send_update(entry):
+
+def send_to_discord(entry):
     embed = build_embed(entry)
-    data = {"embeds": [embed]}
-    requests.post(WEBHOOK_URL, json=data)
+
+    payload = {
+        "embeds": [embed]
+    }
+
+    headers = {
+        "Content-Type": "application/json"
+    }
+
+    response = requests.post(WEBHOOK_URL, json=payload, headers=headers)
+
+    if response.status_code != 204:
+        print(f"Erro ao postar embed: {response.status_code} - {response.text}")
+    else:
+        print("✅ Mensagem enviada com sucesso para o Discord!")
+
 
 
 
