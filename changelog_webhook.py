@@ -279,15 +279,12 @@ def run_once():
         print("Primeira execução: estado inicializado sem postar históricos.")
         return
 
-    for e in new_logs:
-    try:
-        send_to_discord(e)
-        print("Postado changelog id:", e.get("id") or e.get("Id"))
-    except Exception as exc:
-        print("Erro ao postar embed:", exc)
-
-
-
+        for e in new_logs:
+        try:
+            send_to_discord(e)
+            print("Postado changelog id:", e.get("id") or e.get("Id"))
+        except Exception as exc:
+            print("Erro ao postar embed:", exc)
 
         # atualizar estado
         eid = e.get("id") or e.get("Id")
@@ -300,6 +297,7 @@ def run_once():
             state["last_ts"] = e.get("createdAt") or e.get("CreatedAt")
         save_state(state)
         state_changed = True
+
 
     if state_changed:
         print("Estado atualizado.")
