@@ -1,12 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+
 """
 changelog_webhook.py
-
-Script simples para consultar a API de change logs (com Basic Auth) e enviar uma embed ao Discord via Webhook.
-- Suporta carregar credenciais via VARIÁVEIS DE AMBIENTE ou arquivo .env (opcional, usando python-dotenv).
-- Mantém estado em um arquivo JSON para não repostar logs antigos.
-- Modo `--once` para execução única (útil para testes / agendamento).
+Bot que consulta uma API de change logs e posta no Discord via Webhook.
 """
 
 import os
@@ -14,14 +11,15 @@ import time
 import json
 import argparse
 from datetime import datetime, timezone, timedelta
-import requests
 
-# tentativa de carregar .env (opcional)
+# tenta carregar .env
 try:
     from dotenv import load_dotenv
     load_dotenv()
 except Exception:
     pass
+
+import requests
 
 # ---------------- CONFIG ----------------
 WEBHOOK_URL = os.getenv("WEBHOOK_URL") or os.getenv("DISCORD_WEBHOOK")
@@ -31,15 +29,12 @@ if not WEBHOOK_URL:
 API_URL = os.getenv("API_URL", "")
 API_USERNAME = os.getenv("API_USERNAME")
 API_PASSWORD = os.getenv("API_PASSWORD")
-POLL_INTERVAL = int(os.getenv("POLL_INTERVAL", "300"))  # segundos
+POLL_INTERVAL = int(os.getenv("POLL_INTERVAL", "300"))
 STATE_FILE = os.getenv("STATE_FILE", "changelog_state.json")
 POST_HISTORY_ON_FIRST_RUN = os.getenv("POST_HISTORY_ON_FIRST_RUN", "false").lower() in ("1", "true", "yes")
+RED_COLOR = int(os.getenv("RED_COLOR", "0xFF0000"), 0)
 
-# Fuso horário de Brasília (UTC-3)
-BRASILIA_TZ = timezone(timedelta(hours=-3))
-
-
-# ---------------- STATE ----------------
+# ---------------- FUNÇÕES AUX ----------------
 def load_state():
     if os.path.exists(STATE_FILE):
         try:
@@ -49,14 +44,12 @@ def load_state():
             return {}
     return {}
 
-
 def save_state(state):
     try:
         with open(STATE_FILE, "w", encoding="utf-8") as f:
             json.dump(state, f, ensure_ascii=False, indent=2)
     except Exception as e:
         print("Erro salvando estado:", e)
-
 
 def parse_iso_datetime(s):
     if not s:
@@ -74,14 +67,40 @@ def parse_iso_datetime(s):
                 pass
     return None
 
+def format_local(dt):
+    if dt is None:
+        now = datetime.now()
+        return now.strftime("%d/%m/%Y, %H:%M:%S"), now.strftime("%H:%M")
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc).astimezone()
+    else:
+        dt = dt.astimezone()
+    return dt.strftime("%d/%m/%Y, %H:%M:%S"), dt.strftime("%H:%M")
 
-# ---------------- DISCORD ----------------
+# ---------------- EMBED ----------------
+BRASILIA_TZ = timezone(timedelta(hours=-3))
+
 def build_embed(entry):
-    game_name = entry.get("game") or entry.get("Game") or "Sem nome"
-    mensagem_pt = entry.get("mensagem_pt") or entry.get("MensagemPT") or entry.get("mensagem") or "Mensagem PT não encontrada"
-    mensagem_en = entry.get("mensagem_en") or entry.get("MensagemEN") or "Mensagem EN não encontrada"
+    print("🔍 DEBUG changelog recebido:", json.dumps(entry, indent=2, ensure_ascii=False))
 
-    now_brasilia = datetime.now(BRASILIA_TZ).strftime("%d/%m/%Y, %H:%M:%S")
+    mensagem_pt = entry.get("mensagem_pt") or entry.get("MensagemPT")
+    mensagem_en = entry.get("mensagem_en") or entry.get("MensagemEN")
+    mensagem = entry.get("message")
+
+    if not mensagem_pt and mensagem:
+        mensagem_pt = mensagem
+    if not mensagem_en and mensagem:
+        mensagem_en = mensagem
+
+    created_at = entry.get("createdAt") or entry.get("CreatedAt")
+    if created_at:
+        dt = parse_iso_datetime(created_at)
+        if dt:
+            created_fmt, hora_fmt = format_local(dt)
+        else:
+            created_fmt = created_at
+    else:
+        created_fmt = datetime.now(BRASILIA_TZ).strftime("%d/%m/%Y, %H:%M:%S")
 
     embed = {
         "title": "📢 Nova atualização",
@@ -89,12 +108,12 @@ def build_embed(entry):
         "fields": [
             {
                 "name": "🎮 Mensagem",
-                "value": f"🇧🇷 [{game_name}] - {mensagem_pt}\n🇺🇸 [{game_name}] - {mensagem_en}",
+                "value": f"🇧🇷 {mensagem_pt}\n🇺🇸 {mensagem_en}",
                 "inline": False
             },
             {
                 "name": "🕒 Date",
-                "value": now_brasilia,
+                "value": created_fmt,
                 "inline": False
             },
             {
@@ -106,24 +125,20 @@ def build_embed(entry):
     }
     return embed
 
-
 def send_to_discord(entry):
     if not WEBHOOK_URL:
         raise ValueError("WEBHOOK_URL não está configurado")
-    
     embed = build_embed(entry)
     payload = {"embeds": [embed]}
     headers = {"Content-Type": "application/json"}
 
     response = requests.post(WEBHOOK_URL, json=payload, headers=headers, timeout=15)
-
     if response.status_code != 204:
         print(f"❌ Erro ao postar no Discord: {response.status_code} - {response.text}")
     else:
         print("✅ Mensagem enviada com sucesso para o Discord!")
 
-
-# ---------------- FETCH API ----------------
+# ---------------- API ----------------
 def fetch_changelogs():
     if not API_URL:
         raise ValueError("API_URL não está configurado")
@@ -135,33 +150,19 @@ def fetch_changelogs():
     resp.raise_for_status()
     return resp.json()
 
-
-# ---------------- MAIN ----------------
+# ---------------- EXECUÇÃO ----------------
 def run_once():
     state = load_state()
-    last_id = int(state.get("last_id", 0))
     last_ts = state.get("last_ts")
 
     data = fetch_changelogs()
-    if isinstance(data, dict) and "data" in data:
-        logs = data["data"]
-    elif isinstance(data, list):
-        logs = data
-    else:
-        logs = []
+    logs = data["data"] if isinstance(data, dict) and "data" in data else data
 
     if not logs:
         print("Sem changelogs no retorno da API.")
         return
 
-    # ordenar cronologicamente
     def sort_key(e):
-        eid = e.get("id") or e.get("Id")
-        if eid:
-            try:
-                return int(eid)
-            except Exception:
-                pass
         created = parse_iso_datetime(e.get("createdAt") or e.get("CreatedAt") or "")
         return created.timestamp() if created else 0
 
@@ -169,62 +170,34 @@ def run_once():
     new_logs = []
 
     for e in logs_sorted:
-        eid = e.get("id") or e.get("Id")
-        if eid:
-            try:
-                if int(eid) > last_id:
+        created = parse_iso_datetime(e.get("createdAt") or e.get("CreatedAt") or "")
+        if created:
+            if not last_ts:
+                new_logs.append(e)
+            else:
+                last_ts_dt = parse_iso_datetime(last_ts)
+                if last_ts_dt is None or created > last_ts_dt:
                     new_logs.append(e)
-            except Exception:
-                pass
-        else:
-            created = parse_iso_datetime(e.get("createdAt") or e.get("CreatedAt") or "")
-            if created:
-                if not last_ts:
-                    new_logs.append(e)
-                else:
-                    last_ts_dt = parse_iso_datetime(last_ts)
-                    if last_ts_dt is None or created > last_ts_dt:
-                        new_logs.append(e)
 
     if not new_logs:
         print("Sem novos changelogs.")
         return
 
-    # primeira execução
+    state_changed = False
     if (not state) and (not POST_HISTORY_ON_FIRST_RUN):
-        max_id = last_id
-        for e in logs_sorted:
-            eid = e.get("id") or e.get("Id")
-            if eid:
-                try:
-                    max_id = max(max_id, int(eid))
-                except Exception:
-                    pass
-        state["last_id"] = max_id
-        if logs_sorted:
-            ts_candidate = logs_sorted[-1].get("createdAt") or logs_sorted[-1].get("CreatedAt")
-            if ts_candidate:
-                state["last_ts"] = ts_candidate
+        last = logs_sorted[-1]
+        state["last_ts"] = last.get("createdAt") or last.get("CreatedAt")
         save_state(state)
         print("Primeira execução: estado inicializado sem postar históricos.")
         return
 
-    state_changed = False
-
     for e in new_logs:
         try:
             send_to_discord(e)
-            print("Postado changelog id:", e.get("id") or e.get("Id"))
+            print("Postado changelog:", e.get("message"))
         except Exception as exc:
             print("Erro ao postar embed:", exc)
 
-        # atualizar estado
-        eid = e.get("id") or e.get("Id")
-        if eid:
-            try:
-                state["last_id"] = int(eid)
-            except Exception:
-                pass
         if e.get("createdAt") or e.get("CreatedAt"):
             state["last_ts"] = e.get("createdAt") or e.get("CreatedAt")
         save_state(state)
@@ -232,7 +205,6 @@ def run_once():
 
     if state_changed:
         print("Estado atualizado.")
-
 
 def main_loop():
     print("Iniciando loop — pressione Ctrl+C para parar")
@@ -243,10 +215,9 @@ def main_loop():
             print("Erro no loop:", e)
         time.sleep(POLL_INTERVAL)
 
-
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Webhook changelog poster (com Basic Auth)")
-    parser.add_argument("--once", action="store_true", help="Executa apenas uma vez e sai (útil para testes)")
+    parser = argparse.ArgumentParser(description="Webhook changelog poster")
+    parser.add_argument("--once", action="store_true", help="Executa apenas uma vez e sai")
     args = parser.parse_args()
 
     if not WEBHOOK_URL:
@@ -259,11 +230,9 @@ if __name__ == "__main__":
     else:
         main_loop()
 
-
 # ---------------- AUTO RESTART ----------------
 import threading
-
-AUTO_RESTART_MINUTES = 1440  # 24h
+AUTO_RESTART_MINUTES = 1440
 
 def auto_restart():
     print("⏳ Reiniciando automaticamente para liberar memória...")
@@ -273,13 +242,3 @@ if AUTO_RESTART_MINUTES > 0:
     t = threading.Timer(AUTO_RESTART_MINUTES * 60, auto_restart)
     t.daemon = True
     t.start()
-
-
-
-for e in new_logs:
-    print("DEBUG changelog recebido:", e)  # <--- mostra tudo que veio
-    try:
-        send_to_discord(e)
-        print("Postado changelog id:", e.get("id") or e.get("Id"))
-    except Exception as exc:
-        print("Erro ao postar embed:", exc)
