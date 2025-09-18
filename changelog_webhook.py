@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 changelog_webhook.py
-Consulta API de changelogs (Basic Auth opcional) e posta embeds no Discord via webhook.
+Consulta API de changelogs (Basic Auth opcional), traduz (se preciso) e posta embeds no Discord via webhook.
 Config via variáveis de ambiente (recomendo usar painel da Square Cloud).
 """
 
@@ -14,6 +14,14 @@ import re
 import requests
 from datetime import datetime, timezone, timedelta
 
+# tradução automática
+try:
+    from googletrans import Translator
+    translator = Translator()
+except Exception:
+    translator = None
+    print("⚠️ AVISO: googletrans não instalado. Tradução automática desabilitada.")
+
 # tenta carregar .env local (opcional)
 try:
     from dotenv import load_dotenv
@@ -21,31 +29,27 @@ try:
 except Exception:
     pass
 
-# ---------------- CONFIG (variáveis de ambiente) ----------------
+# ---------------- CONFIG ----------------
 WEBHOOK_URL = os.getenv("WEBHOOK_URL") or os.getenv("DISCORD_WEBHOOK") or ""
 API_URL = os.getenv("API_URL") or ""
 API_USERNAME = os.getenv("API_USERNAME")  # opcional (Basic Auth)
 API_PASSWORD = os.getenv("API_PASSWORD")  # opcional (Basic Auth)
-POLL_INTERVAL = int(os.getenv("POLL_INTERVAL", "60"))  # segundos entre polls
+POLL_INTERVAL = int(os.getenv("POLL_INTERVAL", "60"))  # segundos
 STATE_FILE = os.getenv("STATE_FILE", "changelog_state.json")
 POST_HISTORY_ON_FIRST_RUN = os.getenv("POST_HISTORY_ON_FIRST_RUN", "false").lower() in ("1", "true", "yes")
 RED_COLOR = int(os.getenv("RED_COLOR", "0xFF0000"), 0)
 
-# Mention options:
-# MENTION_EVERYONE = true -> envia @everyone real (faz ping) numa 2ª mensagem abaixo do embed
-# OBFUSCATE_EVERYONE = true -> envia @\u200beveryone (não notifica, só mostra texto)
 MENTION_EVERYONE = os.getenv("MENTION_EVERYONE", "true").lower() in ("1", "true", "yes")
 OBFUSCATE_EVERYONE = os.getenv("OBFUSCATE_EVERYONE", "false").lower() in ("1", "true", "yes")
 
 FOOTER_TEXT = os.getenv("FOOTER_TEXT", "© 2025 General Store")
 
-# Timezone Brasília
 BRASILIA_TZ = timezone(timedelta(hours=-3))
 
 if not API_URL:
-    print("AVISO: API_URL não configurado. Defina a variável de ambiente API_URL.")
+    print("⚠️ AVISO: API_URL não configurado.")
 if not WEBHOOK_URL:
-    print("AVISO: WEBHOOK_URL não configurado. Defina WEBHOOK_URL ou DISCORD_WEBHOOK.")
+    print("⚠️ AVISO: WEBHOOK_URL não configurado.")
 
 # ---------------- helpers ----------------
 def load_state():
@@ -90,49 +94,52 @@ def format_local(dt):
         dt = dt.astimezone(BRASILIA_TZ)
     return dt.strftime("%d/%m/%Y, %H:%M:%S"), dt.strftime("%H:%M")
 
-# tenta extrair [Game] - rest do campo message
 def split_game_and_text(msg):
     if not msg:
         return None, None
     m = re.match(r'^\s*\[([^\]]+)\]\s*[-–:]\s*(.*)', msg)
     if m:
         return m.group(1).strip(), m.group(2).strip()
-    # fallback: talvez o formato seja "[Game] Texto" sem "-" — tenta:
     m2 = re.match(r'^\s*\[([^\]]+)\]\s*(.*)', msg)
     if m2:
         return m2.group(1).strip(), m2.group(2).strip()
     return None, msg.strip()
 
+def auto_translate_to_pt(text):
+    if not translator:
+        return text
+    try:
+        result = translator.translate(text, src="en", dest="pt")
+        return result.text
+    except Exception as e:
+        print("⚠️ Erro traduzindo:", e)
+        return text
+
 # ---------------- build embed ----------------
 def build_embed(entry):
-    # DEBUG: imprime o JSON cru (útil para ver a estrutura)
     try:
         print("🔍 DEBUG changelog recebido:\n", json.dumps(entry, indent=2, ensure_ascii=False))
     except Exception:
-        print("🔍 DEBUG (não serializável) ->", entry)
+        pass
 
-    # Buscar mensagens em possíveis chaves (pt / en)
-    message_pt = entry.get("message_pt") or entry.get("mensagem_pt") or entry.get("pt") or None
-    message_en = entry.get("message_en") or entry.get("mensagem_en") or entry.get("en") or None
-    message = entry.get("message") or entry.get("msg") or None
+    message_pt = entry.get("message_pt") or entry.get("mensagem_pt") or entry.get("pt")
+    message_en = entry.get("message_en") or entry.get("mensagem_en") or entry.get("en")
+    message = entry.get("message") or entry.get("msg")
 
-    # se não houver pt/en, usa o message como fallback para ambos (ou apenas EN se preferir)
     if not message_pt and message:
-        # tenta extrair só o texto (sem o [Game] prefix) para pt
         _, fallback_text = split_game_and_text(message)
-        message_pt = fallback_text
+        message_pt = auto_translate_to_pt(fallback_text)
+
     if not message_en and message:
         _, fallback_text = split_game_and_text(message)
         message_en = fallback_text
 
-    # tenta extrair nome do jogo do próprio message (se existir no formato [Game] - text)
     game_name = entry.get("game") or entry.get("Game")
     if not game_name and message:
         gn, _ = split_game_and_text(message)
         if gn:
             game_name = gn
 
-    # preparar labels com [Game] se disponível
     if game_name:
         valor_pt = f"🇧🇷 [{game_name}] - {message_pt}"
         valor_en = f"🇺🇸 [{game_name}] - {message_en}"
@@ -140,14 +147,10 @@ def build_embed(entry):
         valor_pt = f"🇧🇷 {message_pt}"
         valor_en = f"🇺🇸 {message_en}"
 
-    # data formatada (Brasília)
-    created_at = entry.get("createdAt") or entry.get("CreatedAt") or entry.get("date") or None
+    created_at = entry.get("createdAt") or entry.get("CreatedAt") or entry.get("date")
     if created_at:
         dt = parse_iso_datetime(created_at)
-        if dt:
-            created_fmt, _ = format_local(dt)
-        else:
-            created_fmt = created_at
+        created_fmt = format_local(dt)[0] if dt else created_at
     else:
         created_fmt = datetime.now(BRASILIA_TZ).strftime("%d/%m/%Y, %H:%M:%S")
 
@@ -160,14 +163,10 @@ def build_embed(entry):
         ],
         "footer": {"text": FOOTER_TEXT}
     }
-
     return embed
 
 # ---------------- posting ----------------
 def post_embed_then_mention(entry):
-    """
-    Envia o embed e (opcionalmente) envia a menção @everyone logo abaixo.
-    """
     if not WEBHOOK_URL:
         print("Erro: WEBHOOK_URL não configurado.")
         return
@@ -177,27 +176,22 @@ def post_embed_then_mention(entry):
 
     try:
         r = requests.post(WEBHOOK_URL, json=payload_embed, timeout=15)
+        if r.status_code not in (200, 204):
+            print("Erro ao postar embed:", r.status_code, r.text[:400])
+            return
+        print("✅ Embed enviado com sucesso.")
     except Exception as e:
         print("Erro ao postar embed:", e)
         return
 
-    if r.status_code not in (200, 204):
-        print("Erro ao postar embed:", r.status_code, r.text[:400])
-        return
-    else:
-        print("✅ Embed enviado com sucesso (status {}).".format(r.status_code))
-
-    # Se o usuário quer mencionar everyone:
     if MENTION_EVERYONE:
-        # se OBFUSCATE_EVERYONE True -> não notifica (ofusca)
         if OBFUSCATE_EVERYONE:
-            mention_text = "@\u200beveryone"  # visível mas NÃO notifica
-            allowed_mentions = {}  # nada
+            mention_text = "@\u200beveryone"
+            allowed_mentions = {}
         else:
             mention_text = "@everyone"
-            allowed_mentions = {"parse": ["everyone"]}  # garante que o ping funcione
+            allowed_mentions = {"parse": ["everyone"]}
 
-        # dar um pequeno delay para que fique abaixo do embed
         time.sleep(0.35)
         payload_mention = {"content": mention_text, "allowed_mentions": allowed_mentions}
         try:
@@ -205,11 +199,11 @@ def post_embed_then_mention(entry):
             if r2.status_code not in (200, 204):
                 print("Aviso: falha ao enviar menção:", r2.status_code, r2.text[:400])
             else:
-                print("✅ Menção enviada (mention obfuscated={}).".format(bool(OBFUSCATE_EVERYONE)))
+                print("✅ Menção enviada.")
         except Exception as e:
             print("Erro ao enviar menção:", e)
 
-# ---------------- fetch changelogs (com Basic Auth) ----------------
+# ---------------- fetch changelogs ----------------
 def fetch_changelogs():
     if not API_URL:
         raise ValueError("API_URL não está configurado")
@@ -219,36 +213,26 @@ def fetch_changelogs():
             resp = requests.get(API_URL, headers=headers, auth=(API_USERNAME, API_PASSWORD), timeout=15)
         else:
             resp = requests.get(API_URL, headers=headers, timeout=15)
-        # Mostrar erro detalhado se não 200
         if resp.status_code != 200:
-            try:
-                print("Erro ao buscar changelogs:", resp.status_code, resp.text)
-            except Exception:
-                print("Erro ao buscar changelogs: status", resp.status_code)
+            print("Erro ao buscar changelogs:", resp.status_code, resp.text)
             return []
         return resp.json()
     except Exception as e:
         print("Erro ao buscar changelogs:", e)
         return []
 
-# ---------------- main loop / state logic ----------------
+# ---------------- main loop ----------------
 def run_once():
     state = load_state()
     last_ts = state.get("last_ts")
 
     data = fetch_changelogs()
-    if isinstance(data, dict) and "data" in data:
-        logs = data["data"]
-    elif isinstance(data, list):
-        logs = data
-    else:
-        logs = []
+    logs = data["data"] if isinstance(data, dict) and "data" in data else data if isinstance(data, list) else []
 
     if not logs:
         print("Sem changelogs no retorno da API.")
         return
 
-    # ordena por createdAt
     def sort_key(e):
         created = parse_iso_datetime(e.get("createdAt") or e.get("CreatedAt") or "")
         return created.timestamp() if created else 0
@@ -270,7 +254,6 @@ def run_once():
         print("Sem novos changelogs.")
         return
 
-    # se primeira execução e POST_HISTORY_ON_FIRST_RUN False -> apenas atualiza estado sem postar
     if (not load_state()) and (not POST_HISTORY_ON_FIRST_RUN):
         last = logs_sorted[-1]
         state = {"last_ts": last.get("createdAt") or last.get("CreatedAt")}
@@ -279,22 +262,16 @@ def run_once():
         return
 
     state = load_state()
-    state_changed = False
-
     for e in new_logs:
         try:
             post_embed_then_mention(e)
         except Exception as exc:
             print("Erro ao postar embed/mention:", exc)
 
-        # atualizar estado para createdAt do item
         if e.get("createdAt") or e.get("CreatedAt"):
             state["last_ts"] = e.get("createdAt") or e.get("CreatedAt")
             save_state(state)
-            state_changed = True
-
-    if state_changed:
-        print("Estado atualizado.")
+    print("Estado atualizado.")
 
 def run_loop():
     print("[Square Cloud Realtime] Connection stablished! 😏")
