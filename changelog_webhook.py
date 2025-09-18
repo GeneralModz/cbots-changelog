@@ -1,138 +1,315 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-
 """
 changelog_webhook.py
-
-Script que consulta a API de change logs e envia mensagens no Discord via Webhook.
-Suporta execução única (--once) ou em loop contínuo.
-
-Variáveis de ambiente necessárias:
-  WEBHOOK_URL=https://discord.com/api/webhooks/......
-  API_URL=https://sua.api/changelog
+Consulta API de changelogs (Basic Auth opcional) e posta embeds no Discord via webhook.
+Config via variáveis de ambiente (recomendo usar painel da Square Cloud).
 """
 
 import os
 import time
-import requests
+import json
 import argparse
-from datetime import datetime
+import re
+import requests
+from datetime import datetime, timezone, timedelta
 
+# tenta carregar .env local (opcional)
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except Exception:
+    pass
 
-# ---------------- CONFIG ----------------
-API_URL = os.getenv("API_URL")
-WEBHOOK_URL = os.getenv("WEBHOOK_URL") or os.getenv("DISCORD_WEBHOOK")
+# ---------------- CONFIG (variáveis de ambiente) ----------------
+WEBHOOK_URL = os.getenv("WEBHOOK_URL") or os.getenv("DISCORD_WEBHOOK") or ""
+API_URL = os.getenv("API_URL") or ""
+API_USERNAME = os.getenv("API_USERNAME")  # opcional (Basic Auth)
+API_PASSWORD = os.getenv("API_PASSWORD")  # opcional (Basic Auth)
+POLL_INTERVAL = int(os.getenv("POLL_INTERVAL", "60"))  # segundos entre polls
+STATE_FILE = os.getenv("STATE_FILE", "changelog_state.json")
+POST_HISTORY_ON_FIRST_RUN = os.getenv("POST_HISTORY_ON_FIRST_RUN", "false").lower() in ("1", "true", "yes")
+RED_COLOR = int(os.getenv("RED_COLOR", "0xFF0000"), 0)
+
+# Mention options:
+# MENTION_EVERYONE = true -> envia @everyone real (faz ping) numa 2ª mensagem abaixo do embed
+# OBFUSCATE_EVERYONE = true -> envia @\u200beveryone (não notifica, só mostra texto)
+MENTION_EVERYONE = os.getenv("MENTION_EVERYONE", "true").lower() in ("1", "true", "yes")
+OBFUSCATE_EVERYONE = os.getenv("OBFUSCATE_EVERYONE", "false").lower() in ("1", "true", "yes")
+
+FOOTER_TEXT = os.getenv("FOOTER_TEXT", "© 2025 General Store")
+
+# Timezone Brasília
+BRASILIA_TZ = timezone(timedelta(hours=-3))
 
 if not API_URL:
-    raise ValueError("API_URL não está configurado")
+    print("AVISO: API_URL não configurado. Defina a variável de ambiente API_URL.")
 if not WEBHOOK_URL:
-    print("⚠️ Nenhum webhook configurado! Defina WEBHOOK_URL ou DISCORD_WEBHOOK.")
+    print("AVISO: WEBHOOK_URL não configurado. Defina WEBHOOK_URL ou DISCORD_WEBHOOK.")
 
+# ---------------- helpers ----------------
+def load_state():
+    if os.path.exists(STATE_FILE):
+        try:
+            with open(STATE_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return {}
+    return {}
 
-# ---------------- FUNÇÕES ----------------
-def fetch_changelogs():
-    """Busca os changelogs da API"""
+def save_state(state):
     try:
-        response = requests.get(API_URL, timeout=15)
-        if response.status_code == 200:
-            return response.json()
-        else:
-            print("Erro ao buscar changelogs:", response.text)
-            return []
+        with open(STATE_FILE, "w", encoding="utf-8") as f:
+            json.dump(state, f, ensure_ascii=False, indent=2)
     except Exception as e:
-        print("Erro de conexão com API:", e)
-        return []
+        print("Erro salvando estado:", e)
 
+def parse_iso_datetime(s):
+    if not s:
+        return None
+    s = s.strip()
+    if s.endswith("Z"):
+        s = s[:-1] + "+00:00"
+    try:
+        return datetime.fromisoformat(s)
+    except Exception:
+        for fmt in ("%Y-%m-%dT%H:%M:%S.%f%z", "%Y-%m-%dT%H:%M:%S%z", "%Y-%m-%dT%H:%M:%S"):
+            try:
+                return datetime.strptime(s, fmt)
+            except Exception:
+                pass
+    return None
 
-def send_to_discord(entry):
-    """Monta e envia embed para o Discord"""
+def format_local(dt):
+    if dt is None:
+        now = datetime.now(BRASILIA_TZ)
+        return now.strftime("%d/%m/%Y, %H:%M:%S"), now.strftime("%H:%M")
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc).astimezone(BRASILIA_TZ)
+    else:
+        dt = dt.astimezone(BRASILIA_TZ)
+    return dt.strftime("%d/%m/%Y, %H:%M:%S"), dt.strftime("%H:%M")
 
-    # Pegando mensagens PT e EN (cada uma separada)
-    message_pt = entry.get("message_pt") or "Mensagem PT não encontrada"
-    message_en = entry.get("message_en") or "Message EN not found"
+# tenta extrair [Game] - rest do campo message
+def split_game_and_text(msg):
+    if not msg:
+        return None, None
+    m = re.match(r'^\s*\[([^\]]+)\]\s*[-–:]\s*(.*)', msg)
+    if m:
+        return m.group(1).strip(), m.group(2).strip()
+    # fallback: talvez o formato seja "[Game] Texto" sem "-" — tenta:
+    m2 = re.match(r'^\s*\[([^\]]+)\]\s*(.*)', msg)
+    if m2:
+        return m2.group(1).strip(), m2.group(2).strip()
+    return None, msg.strip()
 
-    created_at = entry.get("createdAt", datetime.utcnow().isoformat())
+# ---------------- build embed ----------------
+def build_embed(entry):
+    # DEBUG: imprime o JSON cru (útil para ver a estrutura)
+    try:
+        print("🔍 DEBUG changelog recebido:\n", json.dumps(entry, indent=2, ensure_ascii=False))
+    except Exception:
+        print("🔍 DEBUG (não serializável) ->", entry)
+
+    # Buscar mensagens em possíveis chaves (pt / en)
+    message_pt = entry.get("message_pt") or entry.get("mensagem_pt") or entry.get("pt") or None
+    message_en = entry.get("message_en") or entry.get("mensagem_en") or entry.get("en") or None
+    message = entry.get("message") or entry.get("msg") or None
+
+    # se não houver pt/en, usa o message como fallback para ambos (ou apenas EN se preferir)
+    if not message_pt and message:
+        # tenta extrair só o texto (sem o [Game] prefix) para pt
+        _, fallback_text = split_game_and_text(message)
+        message_pt = fallback_text
+    if not message_en and message:
+        _, fallback_text = split_game_and_text(message)
+        message_en = fallback_text
+
+    # tenta extrair nome do jogo do próprio message (se existir no formato [Game] - text)
+    game_name = entry.get("game") or entry.get("Game")
+    if not game_name and message:
+        gn, _ = split_game_and_text(message)
+        if gn:
+            game_name = gn
+
+    # preparar labels com [Game] se disponível
+    if game_name:
+        valor_pt = f"🇧🇷 [{game_name}] - {message_pt}"
+        valor_en = f"🇺🇸 [{game_name}] - {message_en}"
+    else:
+        valor_pt = f"🇧🇷 {message_pt}"
+        valor_en = f"🇺🇸 {message_en}"
+
+    # data formatada (Brasília)
+    created_at = entry.get("createdAt") or entry.get("CreatedAt") or entry.get("date") or None
+    if created_at:
+        dt = parse_iso_datetime(created_at)
+        if dt:
+            created_fmt, _ = format_local(dt)
+        else:
+            created_fmt = created_at
+    else:
+        created_fmt = datetime.now(BRASILIA_TZ).strftime("%d/%m/%Y, %H:%M:%S")
 
     embed = {
         "title": "📢 Nova atualização",
-        "color": 0xFF0000,  # Vermelho
+        "color": RED_COLOR,
         "fields": [
-            {
-                "name": "📑 Mensagem",
-                "value": f"🇧🇷 {message_pt}\n🇺🇸 {message_en}",
-                "inline": False
-            },
-            {
-                "name": "⏰ Date",
-                "value": created_at.replace("T", " ").replace("Z", ""),
-                "inline": False
-            }
+            {"name": "📝 Mensagem", "value": f"{valor_pt}\n{valor_en}", "inline": False},
+            {"name": "⏰ Date", "value": created_fmt, "inline": False}
         ],
-        "footer": {
-            "text": "© 2025 General Store | @everyone"
-        }
+        "footer": {"text": FOOTER_TEXT}
     }
 
-    payload = {"embeds": [embed]}
+    return embed
 
-    try:
-        response = requests.post(WEBHOOK_URL, json=payload, timeout=15)
-        if response.status_code == 204:
-            print("✅ Mensagem enviada com sucesso para o Discord!")
-        else:
-            print("⚠️ Erro ao enviar mensagem para o Discord:", response.text)
-    except Exception as e:
-        print("❌ Erro na requisição do Discord:", e)
-
-
-def run_once():
-    """Executa apenas uma vez"""
-    data = fetch_changelogs()
-    if not data:
-        print("Nenhum changelog encontrado.")
+# ---------------- posting ----------------
+def post_embed_then_mention(entry):
+    """
+    Envia o embed e (opcionalmente) envia a menção @everyone logo abaixo.
+    """
+    if not WEBHOOK_URL:
+        print("Erro: WEBHOOK_URL não configurado.")
         return
 
-    for entry in data:
-        print("🔍 DEBUG changelog recebido:", entry)
-        try:
-            send_to_discord(entry)
-            print("Postado changelog id:", entry.get("id"))
-        except Exception as exc:
-            print("Erro ao postar embed:", exc)
+    embed = build_embed(entry)
+    payload_embed = {"embeds": [embed]}
 
+    try:
+        r = requests.post(WEBHOOK_URL, json=payload_embed, timeout=15)
+    except Exception as e:
+        print("Erro ao postar embed:", e)
+        return
+
+    if r.status_code not in (200, 204):
+        print("Erro ao postar embed:", r.status_code, r.text[:400])
+        return
+    else:
+        print("✅ Embed enviado com sucesso (status {}).".format(r.status_code))
+
+    # Se o usuário quer mencionar everyone:
+    if MENTION_EVERYONE:
+        # se OBFUSCATE_EVERYONE True -> não notifica (ofusca)
+        if OBFUSCATE_EVERYONE:
+            mention_text = "@\u200beveryone"  # visível mas NÃO notifica
+            allowed_mentions = {}  # nada
+        else:
+            mention_text = "@everyone"
+            allowed_mentions = {"parse": ["everyone"]}  # garante que o ping funcione
+
+        # dar um pequeno delay para que fique abaixo do embed
+        time.sleep(0.35)
+        payload_mention = {"content": mention_text, "allowed_mentions": allowed_mentions}
+        try:
+            r2 = requests.post(WEBHOOK_URL, json=payload_mention, timeout=10)
+            if r2.status_code not in (200, 204):
+                print("Aviso: falha ao enviar menção:", r2.status_code, r2.text[:400])
+            else:
+                print("✅ Menção enviada (mention obfuscated={}).".format(bool(OBFUSCATE_EVERYONE)))
+        except Exception as e:
+            print("Erro ao enviar menção:", e)
+
+# ---------------- fetch changelogs (com Basic Auth) ----------------
+def fetch_changelogs():
+    if not API_URL:
+        raise ValueError("API_URL não está configurado")
+    headers = {"Accept": "application/json"}
+    try:
+        if API_USERNAME and API_PASSWORD:
+            resp = requests.get(API_URL, headers=headers, auth=(API_USERNAME, API_PASSWORD), timeout=15)
+        else:
+            resp = requests.get(API_URL, headers=headers, timeout=15)
+        # Mostrar erro detalhado se não 200
+        if resp.status_code != 200:
+            try:
+                print("Erro ao buscar changelogs:", resp.status_code, resp.text)
+            except Exception:
+                print("Erro ao buscar changelogs: status", resp.status_code)
+            return []
+        return resp.json()
+    except Exception as e:
+        print("Erro ao buscar changelogs:", e)
+        return []
+
+# ---------------- main loop / state logic ----------------
+def run_once():
+    state = load_state()
+    last_ts = state.get("last_ts")
+
+    data = fetch_changelogs()
+    if isinstance(data, dict) and "data" in data:
+        logs = data["data"]
+    elif isinstance(data, list):
+        logs = data
+    else:
+        logs = []
+
+    if not logs:
+        print("Sem changelogs no retorno da API.")
+        return
+
+    # ordena por createdAt
+    def sort_key(e):
+        created = parse_iso_datetime(e.get("createdAt") or e.get("CreatedAt") or "")
+        return created.timestamp() if created else 0
+
+    logs_sorted = sorted(logs, key=sort_key)
+    new_logs = []
+
+    for e in logs_sorted:
+        created = parse_iso_datetime(e.get("createdAt") or e.get("CreatedAt") or "")
+        if created:
+            if not last_ts:
+                new_logs.append(e)
+            else:
+                last_ts_dt = parse_iso_datetime(last_ts)
+                if last_ts_dt is None or created > last_ts_dt:
+                    new_logs.append(e)
+
+    if not new_logs:
+        print("Sem novos changelogs.")
+        return
+
+    # se primeira execução e POST_HISTORY_ON_FIRST_RUN False -> apenas atualiza estado sem postar
+    if (not load_state()) and (not POST_HISTORY_ON_FIRST_RUN):
+        last = logs_sorted[-1]
+        state = {"last_ts": last.get("createdAt") or last.get("CreatedAt")}
+        save_state(state)
+        print("Primeira execução: estado inicializado sem postar históricos.")
+        return
+
+    state = load_state()
+    state_changed = False
+
+    for e in new_logs:
+        try:
+            post_embed_then_mention(e)
+        except Exception as exc:
+            print("Erro ao postar embed/mention:", exc)
+
+        # atualizar estado para createdAt do item
+        if e.get("createdAt") or e.get("CreatedAt"):
+            state["last_ts"] = e.get("createdAt") or e.get("CreatedAt")
+            save_state(state)
+            state_changed = True
+
+    if state_changed:
+        print("Estado atualizado.")
 
 def run_loop():
-    """Executa continuamente"""
     print("[Square Cloud Realtime] Connection stablished! 😏")
-    print("Iniciando loop -- pressione Ctrl+C para parar")
-    ultimo_estado = None
-
+    print("Iniciando loop — pressione Ctrl+C para parar")
     while True:
-        data = fetch_changelogs()
-        if data:
-            novos = []
-            for entry in data:
-                entry_id = entry.get("id") or entry.get("createdAt")
-                if ultimo_estado is None or entry_id not in ultimo_estado:
-                    novos.append(entry)
+        try:
+            run_once()
+        except Exception as e:
+            print("Erro no loop:", e)
+        time.sleep(POLL_INTERVAL)
 
-            for e in novos:
-                try:
-                    send_to_discord(e)
-                    print("Postado changelog id:", e.get("id"))
-                except Exception as exc:
-                    print("Erro ao postar embed:", exc)
-
-            ultimo_estado = {e.get("id") or e.get("createdAt") for e in data}
-            print("Estado atualizado.")
-
-        time.sleep(10)
-
-
-# ---------------- MAIN ----------------
+# ---------------- CLI ----------------
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Webhook de changelog para Discord")
-    parser.add_argument("--once", action="store_true", help="Executa apenas uma vez e sai")
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--once", action="store_true", help="Executa uma vez e sai (teste)")
     args = parser.parse_args()
 
     if args.once:
