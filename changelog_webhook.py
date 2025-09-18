@@ -296,6 +296,15 @@ def run_loop():
 
 # ---------------- CLI ----------------
 if __name__ == "__main__":
+    if __name__ == "__main__":
+    # Teste manual
+    fake_changelog = {
+        "title": "Arena Breakout Infinite",
+        "message": "Added support for steam platform",
+        "date": "2025-09-17T22:45:12"
+    }
+    send_to_discord(fake_changelog)
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--once", action="store_true", help="Executa uma vez e sai (teste)")
     args = parser.parse_args()
@@ -304,3 +313,4 @@ if __name__ == "__main__":
         run_once()
     else:
         run_loop()
+
