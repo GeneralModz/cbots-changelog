@@ -7,46 +7,23 @@ Script simples para consultar a API de change logs (com Basic Auth) e enviar uma
 - Suporta carregar credenciais via VARIÁVEIS DE AMBIENTE ou arquivo .env (opcional, usando python-dotenv).
 - Mantém estado em um arquivo JSON para não repostar logs antigos.
 - Modo `--once` para execução única (útil para testes / agendamento).
-
-Como usar (resumo):
-1) -Criar um .env ou definir as variáveis de ambiente abaixo
-2) Instalar dependências: pip install requests python-dotenv
-3) Rodar: python changelog_webhook.py --once   (teste)
-   ou:  python changelog_webhook.py            (loop contínuo)
-
-Variáveis esperadas (exemplos):
-  WEBHOOK_URL=https://discord.com/api/webhooks/......
-  API_URL=https://api.robotproject.com.br/games/changelog
-  API_USERNAME=seu_usuario
-  API_PASSWORD=sua_senha
-  POLL_INTERVAL=300
-  POST_HISTORY_ON_FIRST_RUN=false
-  STATE_FILE=changelog_state.json
-print("🚀 Teste de deploy automático na Square Cloud")
-
 """
 
 import os
 import time
 import json
 import argparse
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
+import requests
 
 # tentativa de carregar .env (opcional)
 try:
     from dotenv import load_dotenv
     load_dotenv()
 except Exception:
-    # python-dotenv é opcional — o script funcionará lendo variáveis de ambiente diretamente
     pass
 
-import requests
-
-# ---------------- CONFIG (lê das variáveis de ambiente) ----------------
-import os
-import requests
-
-# ---------------- CONFIG (lê das variáveis de ambiente) ----------------
+# ---------------- CONFIG ----------------
 WEBHOOK_URL = os.getenv("WEBHOOK_URL") or os.getenv("DISCORD_WEBHOOK")
 if not WEBHOOK_URL:
     print("⚠️ Nenhum webhook configurado! Defina WEBHOOK_URL ou DISCORD_WEBHOOK.")
@@ -57,12 +34,12 @@ API_PASSWORD = os.getenv("API_PASSWORD")
 POLL_INTERVAL = int(os.getenv("POLL_INTERVAL", "300"))  # segundos
 STATE_FILE = os.getenv("STATE_FILE", "changelog_state.json")
 POST_HISTORY_ON_FIRST_RUN = os.getenv("POST_HISTORY_ON_FIRST_RUN", "false").lower() in ("1", "true", "yes")
-RED_COLOR = int(os.getenv("RED_COLOR", "0xFF0000"), 0)
+
+# Fuso horário de Brasília (UTC-3)
+BRASILIA_TZ = timezone(timedelta(hours=-3))
 
 
-# -----------------------------------------------------------------------
-
-
+# ---------------- STATE ----------------
 def load_state():
     if os.path.exists(STATE_FILE):
         try:
@@ -85,13 +62,11 @@ def parse_iso_datetime(s):
     if not s:
         return None
     s = s.strip()
-    # Normalizar Z -> +00:00
     if s.endswith("Z"):
         s = s[:-1] + "+00:00"
     try:
         return datetime.fromisoformat(s)
     except Exception:
-        # tentar alguns formatos comuns
         for fmt in ("%Y-%m-%dT%H:%M:%S.%f%z", "%Y-%m-%dT%H:%M:%S%z", "%Y-%m-%dT%H:%M:%S"):
             try:
                 return datetime.strptime(s, fmt)
@@ -100,34 +75,8 @@ def parse_iso_datetime(s):
     return None
 
 
-def format_local(dt):
-    if dt is None:
-        now = datetime.now()
-        return now.strftime("%d/%m/%Y, %H:%M:%S"), now.strftime("%H:%M")
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc).astimezone()
-    else:
-        dt = dt.astimezone()
-    return dt.strftime("%d/%m/%Y, %H:%M:%S"), dt.strftime("%H:%M")
-
-
-
-    # ======================================
-# EMBED FORMATADO
-# ======================================
-from datetime import datetime, timedelta, timezone
-import os
-import requests
-
-# Configura fuso horário de Brasília (UTC-3)
-BRASILIA_TZ = timezone(timedelta(hours=-3))
-
-# Pega o webhook de uma variável de ambiente (mais seguro que deixar fixo no código)
-WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK")
-
+# ---------------- DISCORD ----------------
 def build_embed(entry):
-    print("🔍 DEBUG entry:", json.dumps(entry, indent=2, ensure_ascii=False))
-
     game_name = entry.get("game") or entry.get("Game") or "Sem nome"
     mensagem_pt = entry.get("mensagem_pt") or entry.get("MensagemPT") or entry.get("mensagem") or "Mensagem PT não encontrada"
     mensagem_en = entry.get("mensagem_en") or entry.get("MensagemEN") or "Mensagem EN não encontrada"
@@ -174,24 +123,7 @@ def send_to_discord(entry):
         print("✅ Mensagem enviada com sucesso para o Discord!")
 
 
-
-
-
-
-
-
-
-def post_embed(embed):
-    if not WEBHOOK_URL:
-        raise ValueError("WEBHOOK_URL não está configurado")
-    payload = {"embeds": [embed]}
-    headers = {"Content-Type": "application/json"}
-    # nota: se quiser também enviar uma mensagem de texto antes, adicione 'content': "@everyone" (mas evitaremos)
-    resp = requests.post(WEBHOOK_URL, json=payload, headers=headers, timeout=15)
-    resp.raise_for_status()
-    return resp
-
-
+# ---------------- FETCH API ----------------
 def fetch_changelogs():
     if not API_URL:
         raise ValueError("API_URL não está configurado")
@@ -204,13 +136,13 @@ def fetch_changelogs():
     return resp.json()
 
 
+# ---------------- MAIN ----------------
 def run_once():
     state = load_state()
     last_id = int(state.get("last_id", 0))
     last_ts = state.get("last_ts")
 
     data = fetch_changelogs()
-    logs = None
     if isinstance(data, dict) and "data" in data:
         logs = data["data"]
     elif isinstance(data, list):
@@ -258,10 +190,8 @@ def run_once():
         print("Sem novos changelogs.")
         return
 
-    # se for primeira execução e POST_HISTORY_ON_FIRST_RUN == False, apenas atualiza estado
-    state_changed = False
+    # primeira execução
     if (not state) and (not POST_HISTORY_ON_FIRST_RUN):
-        # inicializa last_id para o maior encontrado
         max_id = last_id
         for e in logs_sorted:
             eid = e.get("id") or e.get("Id")
@@ -279,7 +209,9 @@ def run_once():
         print("Primeira execução: estado inicializado sem postar históricos.")
         return
 
-            for e in new_logs:
+    state_changed = False
+
+    for e in new_logs:
         try:
             send_to_discord(e)
             print("Postado changelog id:", e.get("id") or e.get("Id"))
@@ -297,8 +229,6 @@ def run_once():
             state["last_ts"] = e.get("createdAt") or e.get("CreatedAt")
         save_state(state)
         state_changed = True
-
-
 
     if state_changed:
         print("Estado atualizado.")
@@ -319,29 +249,25 @@ if __name__ == "__main__":
     parser.add_argument("--once", action="store_true", help="Executa apenas uma vez e sai (útil para testes)")
     args = parser.parse_args()
 
-    # checagens rápidas
     if not WEBHOOK_URL:
-        print("AVISO: WEBHOOK_URL não configurado. Defina a variável de ambiente WEBHOOK_URL ou crie um .env.")
+        print("AVISO: WEBHOOK_URL não configurado.")
     if not API_URL:
-        print("AVISO: API_URL não configurado. Defina a variável de ambiente API_URL ou crie um .env.")
+        print("AVISO: API_URL não configurado.")
 
     if args.once:
         run_once()
     else:
         main_loop()
 
-# ======================================
-# AUTO-RESTART PARA LIBERAR MEMÓRIA
-# ======================================
-import os
+
+# ---------------- AUTO RESTART ----------------
 import threading
 
-# Tempo em minutos para reiniciar (exemplo: 1440 = 24 horas)
-AUTO_RESTART_MINUTES = 1440  
+AUTO_RESTART_MINUTES = 1440  # 24h
 
 def auto_restart():
     print("⏳ Reiniciando automaticamente para liberar memória...")
-    os._exit(0)  # Square Cloud detecta e reinicia sozinho
+    os._exit(0)
 
 if AUTO_RESTART_MINUTES > 0:
     t = threading.Timer(AUTO_RESTART_MINUTES * 60, auto_restart)
