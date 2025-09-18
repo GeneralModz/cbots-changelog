@@ -288,6 +288,7 @@ def run_once():
 
 
 
+
         # atualizar estado
         eid = e.get("id") or e.get("Id")
         if eid:
