@@ -3,7 +3,7 @@
 """
 changelog_webhook.py
 Consulta API de changelogs e posta embeds no Discord via webhook.
-Agora sempre adiciona @everyone em cinza (sem ping).
+Agora adiciona um @everyone REAL (com notificação).
 """
 
 import os
@@ -152,7 +152,7 @@ def build_embed(entry):
 # ---------------- posting ----------------
 def post_embed_then_mention(entry):
     """
-    Envia o embed e SEMPRE mostra @everyone em cinza (sem ping).
+    Envia o embed e em seguida menciona @everyone de verdade.
     """
     if not WEBHOOK_URL:
         print("Erro: WEBHOOK_URL não configurado.")
@@ -173,19 +173,21 @@ def post_embed_then_mention(entry):
     else:
         print("✅ Embed enviado com sucesso (status {}).".format(r.status_code))
 
-    # sempre envia @everyone cinza (sem notificação)
-    mention_text = "@\u200beveryone"
-    payload_mention = {"content": mention_text, "allowed_mentions": {}}
+    # envia @everyone REAL (com notificação)
+    payload_mention = {
+        "content": "@everyone",
+        "allowed_mentions": {"parse": ["everyone"]}
+    }
 
     time.sleep(0.35)
     try:
         r2 = requests.post(WEBHOOK_URL, json=payload_mention, timeout=10)
         if r2.status_code not in (200, 204):
-            print("Aviso: falha ao enviar menção:", r2.status_code, r2.text[:400])
+            print("Aviso: falha ao enviar menção real:", r2.status_code, r2.text[:400])
         else:
-            print("✅ Menção ofuscada enviada (sem notificação).")
+            print("✅ Menção real enviada (notificação disparada).")
     except Exception as e:
-        print("Erro ao enviar menção:", e)
+        print("Erro ao enviar menção real:", e)
 
 # ---------------- fetch changelogs ----------------
 def fetch_changelogs():
@@ -284,6 +286,7 @@ def run_loop():
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--once", action="store_true", help="Executa uma vez e sai (teste)")
+
     args = parser.parse_args()
 
     if args.once:
