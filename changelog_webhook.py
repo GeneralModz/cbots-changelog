@@ -2,8 +2,8 @@
 # -*- coding: utf-8 -*-
 """
 changelog_webhook.py
-Consulta API de changelogs (Basic Auth opcional), traduz (se preciso) e posta embeds no Discord via webhook.
-Config via variáveis de ambiente (recomendo usar painel da Square Cloud).
+Consulta API de changelogs (Basic Auth opcional) e posta embeds no Discord via webhook.
+Tradução automática para PT-BR usando googletrans (forçada caso só exista EN).
 """
 
 import os
@@ -13,14 +13,6 @@ import argparse
 import re
 import requests
 from datetime import datetime, timezone, timedelta
-
-# tradução automática
-try:
-    from googletrans import Translator
-    translator = Translator()
-except Exception:
-    translator = None
-    print("⚠️ AVISO: googletrans não instalado. Tradução automática desabilitada.")
 
 # tenta carregar .env local (opcional)
 try:
@@ -32,9 +24,9 @@ except Exception:
 # ---------------- CONFIG ----------------
 WEBHOOK_URL = os.getenv("WEBHOOK_URL") or os.getenv("DISCORD_WEBHOOK") or ""
 API_URL = os.getenv("API_URL") or ""
-API_USERNAME = os.getenv("API_USERNAME")  # opcional (Basic Auth)
-API_PASSWORD = os.getenv("API_PASSWORD")  # opcional (Basic Auth)
-POLL_INTERVAL = int(os.getenv("POLL_INTERVAL", "60"))  # segundos
+API_USERNAME = os.getenv("API_USERNAME")
+API_PASSWORD = os.getenv("API_PASSWORD")
+POLL_INTERVAL = int(os.getenv("POLL_INTERVAL", "60"))
 STATE_FILE = os.getenv("STATE_FILE", "changelog_state.json")
 POST_HISTORY_ON_FIRST_RUN = os.getenv("POST_HISTORY_ON_FIRST_RUN", "false").lower() in ("1", "true", "yes")
 RED_COLOR = int(os.getenv("RED_COLOR", "0xFF0000"), 0)
@@ -44,12 +36,13 @@ OBFUSCATE_EVERYONE = os.getenv("OBFUSCATE_EVERYONE", "false").lower() in ("1", "
 
 FOOTER_TEXT = os.getenv("FOOTER_TEXT", "© 2025 General Store")
 
+# Timezone Brasília
 BRASILIA_TZ = timezone(timedelta(hours=-3))
 
 if not API_URL:
-    print("⚠️ AVISO: API_URL não configurado.")
+    print("AVISO: API_URL não configurado. Defina a variável de ambiente API_URL.")
 if not WEBHOOK_URL:
-    print("⚠️ AVISO: WEBHOOK_URL não configurado.")
+    print("AVISO: WEBHOOK_URL não configurado. Defina WEBHOOK_URL ou DISCORD_WEBHOOK.")
 
 # ---------------- helpers ----------------
 def load_state():
@@ -105,38 +98,37 @@ def split_game_and_text(msg):
         return m2.group(1).strip(), m2.group(2).strip()
     return None, msg.strip()
 
-def auto_translate_to_pt(text):
-    if not translator:
-        return text
-    try:
-        result = translator.translate(text, src="en", dest="pt")
-        return result.text
-    except Exception as e:
-        print("⚠️ Erro traduzindo:", e)
-        return text
-
 # ---------------- build embed ----------------
 def build_embed(entry):
     try:
         print("🔍 DEBUG changelog recebido:\n", json.dumps(entry, indent=2, ensure_ascii=False))
     except Exception:
-        pass
+        print("🔍 DEBUG (não serializável) ->", entry)
 
     message_pt = entry.get("message_pt") or entry.get("mensagem_pt") or entry.get("pt")
     message_en = entry.get("message_en") or entry.get("mensagem_en") or entry.get("en")
     message = entry.get("message") or entry.get("msg")
 
-    if not message_pt and message:
-        _, fallback_text = split_game_and_text(message)
-        message_pt = auto_translate_to_pt(fallback_text)
-
     if not message_en and message:
         _, fallback_text = split_game_and_text(message)
         message_en = fallback_text
 
+    # Força tradução se não houver PT
+    if not message_pt:
+        try:
+            from googletrans import Translator
+            translator = Translator()
+            if message_en:
+                translated = translator.translate(message_en, src="en", dest="pt").text
+                message_pt = translated
+                print(f"🌍 Tradução automática: {message_en} -> {message_pt}")
+        except Exception as e:
+            print("⚠️ Erro ao traduzir automaticamente:", e)
+            message_pt = message_en
+
     game_name = entry.get("game") or entry.get("Game")
-    if not game_name and message:
-        gn, _ = split_game_and_text(message)
+    if not game_name and (message_pt or message_en):
+        gn, _ = split_game_and_text(message_pt or message_en)
         if gn:
             game_name = gn
 
@@ -150,7 +142,10 @@ def build_embed(entry):
     created_at = entry.get("createdAt") or entry.get("CreatedAt") or entry.get("date")
     if created_at:
         dt = parse_iso_datetime(created_at)
-        created_fmt = format_local(dt)[0] if dt else created_at
+        if dt:
+            created_fmt, _ = format_local(dt)
+        else:
+            created_fmt = created_at
     else:
         created_fmt = datetime.now(BRASILIA_TZ).strftime("%d/%m/%Y, %H:%M:%S")
 
@@ -163,6 +158,7 @@ def build_embed(entry):
         ],
         "footer": {"text": FOOTER_TEXT}
     }
+
     return embed
 
 # ---------------- posting ----------------
@@ -176,13 +172,15 @@ def post_embed_then_mention(entry):
 
     try:
         r = requests.post(WEBHOOK_URL, json=payload_embed, timeout=15)
-        if r.status_code not in (200, 204):
-            print("Erro ao postar embed:", r.status_code, r.text[:400])
-            return
-        print("✅ Embed enviado com sucesso.")
     except Exception as e:
         print("Erro ao postar embed:", e)
         return
+
+    if r.status_code not in (200, 204):
+        print("Erro ao postar embed:", r.status_code, r.text[:400])
+        return
+    else:
+        print("✅ Embed enviado com sucesso (status {}).".format(r.status_code))
 
     if MENTION_EVERYONE:
         if OBFUSCATE_EVERYONE:
@@ -199,7 +197,7 @@ def post_embed_then_mention(entry):
             if r2.status_code not in (200, 204):
                 print("Aviso: falha ao enviar menção:", r2.status_code, r2.text[:400])
             else:
-                print("✅ Menção enviada.")
+                print("✅ Menção enviada (mention obfuscated={}).".format(bool(OBFUSCATE_EVERYONE)))
         except Exception as e:
             print("Erro ao enviar menção:", e)
 
@@ -214,7 +212,10 @@ def fetch_changelogs():
         else:
             resp = requests.get(API_URL, headers=headers, timeout=15)
         if resp.status_code != 200:
-            print("Erro ao buscar changelogs:", resp.status_code, resp.text)
+            try:
+                print("Erro ao buscar changelogs:", resp.status_code, resp.text)
+            except Exception:
+                print("Erro ao buscar changelogs: status", resp.status_code)
             return []
         return resp.json()
     except Exception as e:
@@ -227,7 +228,12 @@ def run_once():
     last_ts = state.get("last_ts")
 
     data = fetch_changelogs()
-    logs = data["data"] if isinstance(data, dict) and "data" in data else data if isinstance(data, list) else []
+    if isinstance(data, dict) and "data" in data:
+        logs = data["data"]
+    elif isinstance(data, list):
+        logs = data
+    else:
+        logs = []
 
     if not logs:
         print("Sem changelogs no retorno da API.")
@@ -262,6 +268,8 @@ def run_once():
         return
 
     state = load_state()
+    state_changed = False
+
     for e in new_logs:
         try:
             post_embed_then_mention(e)
@@ -271,7 +279,10 @@ def run_once():
         if e.get("createdAt") or e.get("CreatedAt"):
             state["last_ts"] = e.get("createdAt") or e.get("CreatedAt")
             save_state(state)
-    print("Estado atualizado.")
+            state_changed = True
+
+    if state_changed:
+        print("Estado atualizado.")
 
 def run_loop():
     print("[Square Cloud Realtime] Connection stablished! 😏")
