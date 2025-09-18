@@ -296,21 +296,24 @@ def run_loop():
 
 # ---------------- CLI ----------------
 if __name__ == "__main__":
-    if __name__ == "__main__":
-    # Teste manual
-    fake_changelog = {
-        "title": "Arena Breakout Infinite",
-        "message": "Added support for steam platform",
-        "date": "2025-09-17T22:45:12"
-    }
-    send_to_discord(fake_changelog)
-
     parser = argparse.ArgumentParser()
-    parser.add_argument("--once", action="store_true", help="Executa uma vez e sai (teste)")
+    parser.add_argument("--once", action="store_true", help="Executa uma vez e sai (teste real da API)")
+    parser.add_argument("--test", action="store_true", help="Envia um changelog fake para testar no Discord")
     args = parser.parse_args()
 
-    if args.once:
+    if args.test:
+        # 🔹 Envia um changelog falso para testar
+        fake_changelog = {
+            "game": "Arena Breakout Infinite",
+            "message": "[Arena Breakout Infinite] - Added support for steam platform",
+            "mensagem_pt": "Adicionado suporte para a plataforma Steam",
+            "mensagem_en": "Added support for Steam platform",
+            "createdAt": datetime.now(BRASILIA_TZ).isoformat()
+        }
+        post_embed_then_mention(fake_changelog)
+    elif args.once:
         run_once()
     else:
         run_loop()
+
 
