@@ -274,13 +274,12 @@ if AUTO_RESTART_MINUTES > 0:
     t.daemon = True
     t.start()
 
-    import os
-import requests
 
-API_URL = os.getenv("API_URL", "URL_DA_SUA_API")
-API_USERNAME = os.getenv("API_USERNAME")
-API_PASSWORD = os.getenv("API_PASSWORD")
 
-resp = requests.get(API_URL, auth=(API_USERNAME, API_PASSWORD))
-print(resp.json())
-
+for e in new_logs:
+    print("DEBUG changelog recebido:", e)  # <--- mostra tudo que veio
+    try:
+        send_to_discord(e)
+        print("Postado changelog id:", e.get("id") or e.get("Id"))
+    except Exception as exc:
+        print("Erro ao postar embed:", exc)
