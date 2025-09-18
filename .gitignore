@@ -7,3 +7,4 @@ __pycache__/
 
 # Ignorar arquivo de variáveis secretas
 .env
+changelog_state.json
