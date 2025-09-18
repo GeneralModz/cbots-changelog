@@ -126,20 +126,17 @@ BRASILIA_TZ = timezone(timedelta(hours=-3))
 WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK")
 
 def build_embed(entry):
-    # imprime o JSON cru para debug
     print("🔍 DEBUG entry:", json.dumps(entry, indent=2, ensure_ascii=False))
 
-    # Ajusta de acordo com as chaves reais que vierem da API
     game_name = entry.get("game") or entry.get("Game") or "Sem nome"
     mensagem_pt = entry.get("mensagem_pt") or entry.get("MensagemPT") or entry.get("mensagem") or "Mensagem PT não encontrada"
     mensagem_en = entry.get("mensagem_en") or entry.get("MensagemEN") or "Mensagem EN não encontrada"
 
-    # Data em horário de Brasília
     now_brasilia = datetime.now(BRASILIA_TZ).strftime("%d/%m/%Y, %H:%M:%S")
 
     embed = {
         "title": "📢 Nova atualização",
-        "color": 0xFF0000,  # vermelho
+        "color": 0xFF0000,
         "fields": [
             {
                 "name": "🎮 Mensagem",
@@ -152,8 +149,8 @@ def build_embed(entry):
                 "inline": False
             },
             {
-                "name": "\u200B",  # campo invisível
-                "value": "@​everyone",  # <- tem um caractere invisível dentro, vai mencionar mas não fica igual no código
+                "name": "\u200B",
+                "value": "@everyone",
                 "inline": False
             }
         ]
@@ -161,24 +158,21 @@ def build_embed(entry):
     return embed
 
 
-
 def send_to_discord(entry):
+    if not WEBHOOK_URL:
+        raise ValueError("WEBHOOK_URL não está configurado")
+    
     embed = build_embed(entry)
+    payload = {"embeds": [embed]}
+    headers = {"Content-Type": "application/json"}
 
-    payload = {
-        "embeds": [embed]
-    }
-
-    headers = {
-        "Content-Type": "application/json"
-    }
-
-    response = requests.post(WEBHOOK_URL, json=payload, headers=headers)
+    response = requests.post(WEBHOOK_URL, json=payload, headers=headers, timeout=15)
 
     if response.status_code != 204:
-        print(f"Erro ao postar embed: {response.status_code} - {response.text}")
+        print(f"❌ Erro ao postar no Discord: {response.status_code} - {response.text}")
     else:
         print("✅ Mensagem enviada com sucesso para o Discord!")
+
 
 
 
@@ -286,12 +280,12 @@ def run_once():
         return
 
     for e in new_logs:
-        try:
-            embed = build_embed(e)
-            post_embed(embed)
-            print("Postado changelog id:", e.get("id") or e.get("Id"))
-        except Exception as exc:
-            print("Erro ao postar embed:", exc)
+    try:
+        send_to_discord(e)
+        print("Postado changelog id:", e.get("id") or e.get("Id"))
+    except Exception as exc:
+        print("Erro ao postar embed:", exc)
+
         # atualizar estado
         eid = e.get("id") or e.get("Id")
         if eid:
