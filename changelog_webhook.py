@@ -80,63 +80,55 @@ def format_local(dt):
 # ---------------- EMBED ----------------
 BRASILIA_TZ = timezone(timedelta(hours=-3))
 
-def build_embed(entry):
-    print("🔍 DEBUG changelog recebido:", json.dumps(entry, indent=2, ensure_ascii=False))
+def send_to_discord(entry):
+    import requests
+    from datetime import datetime
 
-    mensagem_pt = entry.get("mensagem_pt") or entry.get("MensagemPT")
-    mensagem_en = entry.get("mensagem_en") or entry.get("MensagemEN")
-    mensagem = entry.get("message")
+    webhook_url = os.getenv("WEBHOOK_URL") or os.getenv("DISCORD_WEBHOOK")
+    if not webhook_url:
+        print("⚠️ Nenhum webhook configurado! Defina WEBHOOK_URL ou DISCORD_WEBHOOK.")
+        return
 
-    if not mensagem_pt and mensagem:
-        mensagem_pt = mensagem
-    if not mensagem_en and mensagem:
-        mensagem_en = mensagem
+    # Pegando mensagens PT e EN
+    message_pt = entry.get("message_pt") or entry.get("message") or "Mensagem PT não encontrada"
+    message_en = entry.get("message_en") or entry.get("message") or "Message EN not found"
 
-    created_at = entry.get("createdAt") or entry.get("CreatedAt")
-    if created_at:
-        dt = parse_iso_datetime(created_at)
-        if dt:
-            created_fmt, hora_fmt = format_local(dt)
-        else:
-            created_fmt = created_at
-    else:
-        created_fmt = datetime.now(BRASILIA_TZ).strftime("%d/%m/%Y, %H:%M:%S")
+    created_at = entry.get("createdAt", datetime.utcnow().isoformat())
 
     embed = {
         "title": "📢 Nova atualização",
-        "color": 0xFF0000,
+        "color": 0xFF0000,  # vermelho
         "fields": [
             {
-                "name": "🎮 Mensagem",
-                "value": f"🇧🇷 {mensagem_pt}\n🇺🇸 {mensagem_en}",
+                "name": "📑 Mensagem",
+                "value": f"🇧🇷 {message_pt}\n🇺🇸 {message_en}",
                 "inline": False
             },
             {
-                "name": "🕒 Date",
-                "value": created_fmt,
-                "inline": False
-            },
-            {
-                "name": "\u200B",
-                "value": "@everyone",
+                "name": "⏰ Date",
+                "value": created_at.replace("T", " ").replace("Z", ""),
                 "inline": False
             }
-        ]
+        ],
+        "footer": {
+            "text": "© 2025 General Store"
+        }
     }
-    return embed
 
-def send_to_discord(entry):
-    if not WEBHOOK_URL:
-        raise ValueError("WEBHOOK_URL não está configurado")
-    embed = build_embed(entry)
-    payload = {"embeds": [embed]}
-    headers = {"Content-Type": "application/json"}
+    payload = {
+        "content": "@everyone",  # aqui o mention é real e funcional
+        "embeds": [embed]
+    }
 
-    response = requests.post(WEBHOOK_URL, json=payload, headers=headers, timeout=15)
-    if response.status_code != 204:
-        print(f"❌ Erro ao postar no Discord: {response.status_code} - {response.text}")
-    else:
-        print("✅ Mensagem enviada com sucesso para o Discord!")
+    try:
+        response = requests.post(webhook_url, json=payload)
+        if response.status_code == 204:
+            print("✅ Mensagem enviada com sucesso para o Discord!")
+        else:
+            print("⚠️ Erro ao enviar mensagem para o Discord:", response.text)
+    except Exception as e:
+        print("❌ Erro na requisição do Discord:", e)
+
 
 # ---------------- API ----------------
 def fetch_changelogs():
