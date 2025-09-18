@@ -287,6 +287,7 @@ def run_once():
         print("Erro ao postar embed:", exc)
 
 
+
         # atualizar estado
         eid = e.get("id") or e.get("Id")
         if eid:
